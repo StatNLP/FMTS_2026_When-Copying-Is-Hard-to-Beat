@@ -1,0 +1,2822 @@
+# ============================================================================
+# ICU Feature Catalog - Cross-Database Harmonization
+# ============================================================================
+# Datasets: MIMIC-III, MIMIC-IV, HiRID, eICU, UMM
+#
+# Structure per feature:
+#   name:             Human-readable label
+#   type:             vital | lab | ventilation | medication | fluid
+#                     | demographic | derived
+#   unit:             Harmonized unit
+#   value_range:      [min, max] plausible value range for outlier detection.
+#                     Values outside this range are set to NaN during extraction.
+#                     null for non-numeric features (booleans, categoricals).
+#                     Sources: Paper 2 (01_preprocess_mimic.py) where available,
+#                     clinically plausible bounds otherwise, definition-based
+#                     for derived features (SOFA etc.).
+#   tier:             core | extended | dataset_specific
+#   sofa_relevant:    Used in SOFA computation (bool)
+#   availability:     theoretical per-dataset label (available | sparse
+#                     | partial_period | not_available). Must be consistent
+#                     with source_mapping: empty/null mapping => not_available.
+#   source_mapping:   dataset-specific identifier (itemid, column, variableid)
+#   conversion:       unit conversion notes, if needed
+#   note:             additional context
+#
+# Outlier handling rule:
+#   During extraction (Step 1), values outside value_range are set to NaN
+#   (NOT imputed to median, NOT dropped as rows). Consistent NaN convention
+#   across all feature categories. Downstream imputation happens in Step 2.
+#   Pre/post filter row counts are logged per variable.
+#
+# Empirical coverage:
+#   Per-dataset sample coverage is no longer stored here. It lives as a
+#   timestamped snapshot in data/tables/stage1_feature_coverage.csv after
+#   each Stage-1 pipeline run.
+#
+# Inclusion rule for cross-DB experiments:
+#   Variable must have >=3% sample coverage in TRAINSET of every participating
+#   dataset (see data/tables/stage1_feature_coverage.csv). Exceptions:
+#   SOFA-relevant variables are kept regardless.
+#
+# Sort order: by category, then alphabetical within category.
+# ============================================================================
+
+
+
+# ============================================================================
+# VITAL SIGNS
+# ============================================================================
+
+amv:
+  name: Minute Ventilation
+  type: vital
+  unit: L/min
+  value_range: [0, 50]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: sparse
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents itemid TBD (minute_ventilation)
+    mimic_iv: chartevents itemid 224687
+    hirid: null
+    eicu: respiratoryCharting - mean airway minute volume
+    umm: AMV
+
+tidal_volume:
+  name: Tidal Volume (observed)
+  type: ventilation
+  unit: mL
+  value_range: [50, 2000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents itemids 681, 682, 683, 224685, 224684, 224686
+    mimic_iv: chartevents itemids 224685 (observed), 224684 (set), 224686 (spontaneous)
+    hirid: observation variableid 2410 (Expiratory tidal volume, mL)
+    eicu: respiratoryCharting (Tidal Volume Observed/Set, Exhaled TV)
+    umm: v_tidal_volume
+  note: >
+    AMV (minute ventilation) is derivable as tidal_volume * rr in Step 2
+    for datasets where AMV is not directly measured (e.g. HiRID).
+
+cardiac_output:
+  name: Cardiac Output
+  type: vital
+  unit: L/min
+  value_range: [0, 20]
+  tier: dataset_specific
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: sparse
+    hirid: available
+    eicu: sparse
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents - Cardiac Output
+    mimic_iv: chartevents itemid 228368
+    hirid: observation variableid 1000
+    eicu: vitalAperiodic - cardiacoutput
+    umm: CO
+  note: PiCCO/Swan-Ganz. Primary density in UMM (~29%).
+
+crr:
+  name: Capillary Refill Rate
+  type: vital
+  unit: bool
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: chartevents - CRR
+    mimic_iv: chartevents itemid 223951 (brisk/delayed)
+    hirid: null
+    eicu: null
+    umm: null
+  note: Coded as binary (0=normal refill <3s, 1=abnormal >=3s). MIMIC-IV has both text and numeric encodings;
+    harmonize to bool during extraction.
+
+dbp:
+  name: Diastolic Blood Pressure (merged IBP > NIBP)
+  type: vital
+  unit: mmHg
+  value_range: [5, 200]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: DBP (prefer arterial line, fallback NIBP)
+    mimic_iv: itemid 220051 (art) or 220180 (NIBP)
+    hirid: variableid 120 (invasive only; NIBP not reliably documented)
+    eicu: DBP
+    umm: Invasive BP (D) or Non-invasive BP (D)
+  note: 'Merge rule: within aggregation bin, prefer invasive if present, else non-invasive.'
+
+dbp_invasive:
+  name: Diastolic Blood Pressure (invasive only)
+  type: vital
+  unit: mmHg
+  value_range: [5, 250]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: DBP (arterial line only)
+    mimic_iv: itemid 220051
+    hirid: variableid 120
+    eicu: DBP (arterial)
+    umm: Invasive BP (D)
+
+dbp_noninvasive:
+  name: Diastolic Blood Pressure (non-invasive only)
+  type: vital
+  unit: mmHg
+  value_range: [5, 200]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: sparse
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: DBP (NIBP)
+    mimic_iv: itemid 220180
+    hirid: observation variableid 620 (sparse; NIBP not always reliable)
+    eicu: DBP (non-invasive)
+    umm: Non-invasive BP (D)
+
+etco2:
+  name: End-tidal CO2
+  type: vital
+  unit: mmHg
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: available
+    hirid: sparse
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents - EtCO2
+    mimic_iv: chartevents itemid 228640
+    hirid: observation variableids 2200, 8290, 30010009 (EtCO2)
+    eicu: EtCO2
+    umm: v_etco2
+
+gcs_eye:
+  name: Glasgow Coma Scale - Eye
+  type: vital
+  unit: points
+  value_range: [1, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: GCS_eye
+    mimic_iv: chartevents itemid 220739
+    hirid: observation variableid 10000300
+    eicu: GCS eye
+    umm: GCS eye component
+  note: Range 1-4. Values as documented, no sedation adjustment.
+
+gcs_motor:
+  name: Glasgow Coma Scale - Motor
+  type: vital
+  unit: points
+  value_range: [1, 6]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: GCS_motor
+    mimic_iv: chartevents itemid 223901
+    hirid: observation variableid 10000200
+    eicu: GCS motor
+    umm: GCS motor component
+  note: Range 1-6.
+
+gcs_verbal:
+  name: Glasgow Coma Scale - Verbal
+  type: vital
+  unit: points
+  value_range: [1, 5]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: GCS_verbal
+    mimic_iv: chartevents itemid 223900
+    hirid: observation variableid 10000100
+    eicu: GCS verbal
+    umm: GCS verbal component
+  note: Range 1-5.
+
+hr:
+  name: Heart Rate
+  type: vital
+  unit: bpm
+  value_range: [10, 300]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: HR
+    mimic_iv: chartevents itemid 220045
+    hirid: variableid 200
+    eicu: HR
+    umm: Heart rate
+
+intubated:
+  name: Intubated (binary)
+  type: ventilation
+  unit: bool
+  value_range: null
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: labevents itemid 50812 (Intubated, Blood Gas)
+    mimic_iv: labevents itemid 50812 (Intubated, Blood Gas)
+    hirid: null
+    eicu: null
+    umm: null
+  note: >
+    Point-flag indicating endotracheal intubation, written into the ABG panel
+    at each blood gas in MIMIC. Distinct from mechanical_ventilation: a patient
+    can be intubated and on T-piece (spontaneous), or on NIV/mask (ventilated
+    but not intubated). Only MIMIC-III/IV emit this in Stage 1. For
+    HiRID/eICU/UMM the only available signal is ventilator mode, which is
+    effectively duplicative of mechanical_ventilation; deriving a separate
+    intubated flag would require parsing the mode strings for tube vs. mask
+    keywords and is deferred to Stage 2 if needed.
+
+mbp:
+  name: Mean Blood Pressure (merged IBP > NIBP)
+  type: vital
+  unit: mmHg
+  value_range: [10, 250]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: MBP (prefer arterial, fallback NIBP)
+    mimic_iv: itemid 220052 (art) or 220181 (NIBP)
+    hirid: variableid 110 (invasive only; NIBP not reliably documented)
+    eicu: MBP
+    umm: Invasive BP (M) or Non-invasive BP (M)
+  note: Primary MAP feature for SOFA-cardio threshold evaluation.
+
+mbp_invasive:
+  name: Mean Blood Pressure (invasive only)
+  type: vital
+  unit: mmHg
+  value_range: [10, 300]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: MBP (arterial)
+    mimic_iv: itemid 220052
+    hirid: variableid 110
+    eicu: MBP (arterial)
+    umm: Invasive BP (M)
+
+mbp_noninvasive:
+  name: Mean Blood Pressure (non-invasive only)
+  type: vital
+  unit: mmHg
+  value_range: [10, 250]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: sparse
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: MBP (NIBP)
+    mimic_iv: itemid 220181
+    hirid: observation variableid 610 (sparse; NIBP not always reliable)
+    eicu: MBP (NIBP)
+    umm: Non-invasive BP (M)
+
+mechanical_ventilation:
+  name: Mechanical Ventilation (binary)
+  type: ventilation
+  unit: bool
+  value_range: null
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Mechanically ventilated
+    mimic_iv: derived from ventilator_setting chartevents
+    hirid: derived from ventilator mode
+    eicu: respiratoryCharting / respiratoryCare
+    umm: derived from ventilator mode
+
+rr:
+  name: Respiratory Rate
+  type: vital
+  unit: /min
+  value_range: [2, 80]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: RR
+    mimic_iv: chartevents itemid 220210 / 224690
+    hirid: variableid 250
+    eicu: RR
+    umm: Respiratory rate
+
+sbp:
+  name: Systolic Blood Pressure (merged IBP > NIBP)
+  type: vital
+  unit: mmHg
+  value_range: [20, 300]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: SBP (prefer arterial, fallback NIBP)
+    mimic_iv: itemid 220050 (art) or 220179 (NIBP)
+    hirid: variableid 100 (invasive only; NIBP not reliably documented)
+    eicu: SBP
+    umm: Invasive BP (S) or Non-invasive BP (S)
+
+sbp_invasive:
+  name: Systolic Blood Pressure (invasive only)
+  type: vital
+  unit: mmHg
+  value_range: [20, 350]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: SBP (arterial)
+    mimic_iv: itemid 220050
+    hirid: variableid 100
+    eicu: SBP (arterial)
+    umm: Invasive BP (S)
+
+sbp_noninvasive:
+  name: Systolic Blood Pressure (non-invasive only)
+  type: vital
+  unit: mmHg
+  value_range: [20, 300]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: sparse
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: SBP (NIBP)
+    mimic_iv: itemid 220179
+    hirid: observation variableid 600 (sparse; NIBP not always reliable)
+    eicu: SBP (NIBP)
+    umm: Non-invasive BP (S)
+
+spo2:
+  name: Peripheral Oxygen Saturation
+  type: vital
+  unit: '%'
+  value_range: [40, 100]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: O2 Saturation
+    mimic_iv: chartevents itemid 220277
+    hirid: variableid 260
+    eicu: O2 Saturation
+    umm: SpO2
+
+stroke_volume:
+  name: Stroke Volume
+  type: vital
+  unit: mL
+  value_range: [0, 250]
+  tier: dataset_specific
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: sparse
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: chartevents itemid 228374
+    hirid: null
+    eicu: vitalAperiodic
+    umm: SV
+
+svri:
+  name: Systemic Vascular Resistance Index
+  type: vital
+  unit: dyn.s.cm-5.m2
+  value_range: [0, 10000]
+  tier: dataset_specific
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: chartevents itemid TBD
+    hirid: null
+    eicu: vitalAperiodic
+    umm: null
+
+temp_core:
+  name: Core Body Temperature
+  type: vital
+  unit: C
+  value_range: [25, 45]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Temperature
+    mimic_iv: itemid 223761 (F) or 223762 (C)
+    hirid: variableid 410
+    eicu: Temperature
+    umm: Temperature
+  conversion: MIMIC-IV 223761 in Fahrenheit -> Celsius via (F-32)*5/9.
+
+weight:
+  name: Body Weight (during stay)
+  type: vital
+  unit: kg
+  value_range: [0, 300]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Weight
+    mimic_iv: chartevents itemid 224639 / 226512
+    hirid: observation variableid 10000400 (kg)
+    eicu: null
+    umm: null
+  note: Used for vasopressor per-kg normalization. If missing, use admission weight or last recorded weight.
+
+
+# ============================================================================
+# LABORATORY - BLOOD GAS ANALYSIS
+# ============================================================================
+
+base_excess:
+  name: Base Excess (arterial)
+  type: lab
+  unit: mmol/L
+  value_range: [-31, 28]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Base Excess
+    mimic_iv: labevents itemid 50802
+    hirid: observation variableid 20001300 (mmol/l)
+    eicu: Base Excess or -Base Deficit
+    umm: BE
+  note: eICU reports Base Deficit; convert via BE = -Deficit and merge.
+
+hco3:
+  name: Bicarbonate
+  type: lab
+  unit: mmol/L
+  value_range: [0, 66]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Bicarbonate / Total CO2
+    mimic_iv: labevents itemid 50882 / 50804
+    hirid: observation variableid 20004200 (mmol/l)
+    eicu: Bicarbonate / CO2 (Total)
+    umm: HCO3
+
+paco2:
+  name: Arterial CO2 Partial Pressure
+  type: lab
+  unit: mmHg
+  value_range: [0, 220]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: PCO2
+    mimic_iv: labevents itemid 50818
+    hirid: observation variableid 20001200 (mmHg)
+    eicu: PaCO2
+    umm: pCO2
+
+pao2:
+  name: Arterial Oxygen Partial Pressure
+  type: lab
+  unit: mmHg
+  value_range: [0, 770]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: PO2
+    mimic_iv: labevents itemid 50821
+    hirid: observation variableid 20000200 (mmHg)
+    eicu: PaO2
+    umm: pO2
+  note: Used in P/F ratio for SOFA respiratory component.
+
+ph_arterial:
+  name: Arterial pH
+  type: lab
+  unit: '-'
+  value_range: [0, 14]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: pH Blood
+    mimic_iv: labevents itemid 50820
+    hirid: observation variableid 20000300
+    eicu: pH
+    umm: pH
+
+sao2:
+  name: Arterial Oxygen Saturation (from ABG)
+  type: lab
+  unit: '%'
+  value_range: [40, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: sparse
+    mimic_iv: sparse
+    hirid: available
+    eicu: sparse
+    umm: available
+  source_mapping:
+    mimic_iii: O2 Saturation (ABG)
+    mimic_iv: labevents itemid 50817
+    hirid: observation variableid 20000800 (%)
+    eicu: SaO2
+    umm: SaO2
+
+svo2:
+  name: Central/Mixed Venous Oxygen Saturation
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: dataset_specific
+  sofa_relevant: false
+  availability:
+    mimic_iii: sparse
+    mimic_iv: sparse
+    hirid: sparse
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents - SvO2
+    mimic_iv: labevents itemid 50816
+    hirid: observation variableids 4200, 20001000, 24000737 (SvO2/ScvO2)
+    eicu: null
+    umm: SvO2
+  note: Central venous (ScvO2) and mixed venous (SvO2) may be combined. UMM lists both SvO2 and SgvO2
+    separately.
+
+lactate:
+  name: Arterial Lactate
+  type: lab
+  unit: mmol/L
+  value_range: [0, 33]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Lactate
+    mimic_iv: labevents itemid 50813 or chartevents 225668
+    hirid: observation variableids 24000524, 24000732, 24000485 (mmol/l)
+    eicu: Lactate
+    umm: Lactate
+  conversion: 'mg/dL -> mmol/L: value / 9.01'
+
+
+# ============================================================================
+# LABORATORY - HEMATOLOGY
+# ============================================================================
+
+basophils_pct:
+  name: Basophils (%)
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Basophils
+    mimic_iv: labevents itemid 51146
+    hirid: null
+    eicu: Basophils
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+eosinophils_pct:
+  name: Eosinophils (%)
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Eoisinophils
+    mimic_iv: labevents itemid 51200
+    hirid: null
+    eicu: Eoisinophils
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+hematocrit:
+  name: Hematocrit
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Hct
+    mimic_iv: labevents itemid 51221
+    hirid: null
+    eicu: Hct
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+hemoglobin:
+  name: Hemoglobin
+  type: lab
+  unit: g/dL
+  value_range: [1, 25]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Hgb
+    mimic_iv: labevents itemid 51222
+    hirid: observation variableids 20000900, 24000836 (g/l -> /10 g/dL)
+    eicu: Hgb
+    umm: Hb
+  conversion: 'mmol/L -> g/dL: value * 1.611 (if reported in SI)'
+
+lymphocytes_pct:
+  name: Lymphocytes (%)
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Lymphocytes
+    mimic_iv: labevents itemid 51244
+    hirid: null
+    eicu: Lymphocytes
+    umm: Lymphocytes
+
+lymphocytes_abs:
+  name: Lymphocytes (absolute)
+  type: lab
+  unit: 10^9/L
+  value_range: [0, 25000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Lymphocytes (Absolute)
+    mimic_iv: labevents itemid 51133
+    hirid: observation variableid 24000480 (G/L)
+    eicu: null
+    umm: Lymphocytes
+
+mch:
+  name: Mean Corpuscular Hemoglobin
+  type: lab
+  unit: pg
+  value_range: [0, 50]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: MCH
+    mimic_iv: labevents itemid 51248
+    hirid: observation variableid 24000160 (pg)
+    eicu: MCH
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+mchc:
+  name: Mean Corpuscular Hemoglobin Concentration
+  type: lab
+  unit: g/dL
+  value_range: [0, 50]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: MCHC
+    mimic_iv: labevents itemid 51249
+    hirid: observation variableid 24000170 (g/L -> g/dL)
+    eicu: MCHC
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+mcv:
+  name: Mean Corpuscular Volume
+  type: lab
+  unit: fL
+  value_range: [0, 150]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: MCV
+    mimic_iv: labevents itemid 51250
+    hirid: observation variableid 24000150 (fL)
+    eicu: MCV
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+monocytes_pct:
+  name: Monocytes (%)
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Monocytes
+    mimic_iv: labevents itemid 51254
+    hirid: null
+    eicu: Monocytes
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+mpv:
+  name: Mean Platelet Volume
+  type: lab
+  unit: fL
+  value_range: [0, 50]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: labevents itemid 51265
+    hirid: null
+    eicu: MPV
+    umm: not in DB (verified 2026-09-15)
+
+neutrophils_pct:
+  name: Neutrophils (%)
+  type: lab
+  unit: '%'
+  value_range: [0, 100]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Neutrophils
+    mimic_iv: labevents itemid 51256
+    hirid: observation variableids 24000550,24000556,24000557
+    eicu: Neutrophils
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+platelets:
+  name: Platelet Count
+  type: lab
+  unit: 10^9/L
+  value_range: [1, 2200]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Platelet Count
+    mimic_iv: labevents itemid 51265
+    hirid: observation variableid 20000110 (G/l = 10^9/l)
+    eicu: Platelets
+    umm: Thrombocytes
+
+rbc:
+  name: Red Blood Cell Count
+  type: lab
+  unit: 10^12/L
+  value_range: [0, 14]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: RBC
+    mimic_iv: labevents itemid 51279
+    hirid: null
+    eicu: RBC
+    umm: PtLabResult — 87k rows / 9,932 enc (2026-09-15, to extract)
+
+rdw:
+  name: Red Cell Distribution Width
+  type: lab
+  unit: '%'
+  value_range: [0, 37]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: RDW
+    mimic_iv: labevents itemid 51277
+    hirid: null
+    eicu: RDW
+    umm: not in DB (verified 2026-09-15)
+
+wbc:
+  name: White Blood Cell Count
+  type: lab
+  unit: 10^9/L
+  value_range: [0.01, 1100]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: WBC
+    mimic_iv: labevents itemid 51301
+    hirid: observation variableid 20000700 (G/l = 10^9/l, Leukocytes)
+    eicu: WBC
+    umm: Leukocytes
+
+
+# ============================================================================
+# LABORATORY - CHEMISTRY / ORGAN FUNCTION
+# ============================================================================
+
+albumin:
+  name: Serum Albumin
+  type: lab
+  unit: g/dL
+  value_range: [0, 10]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Albumin
+    mimic_iv: labevents itemid 50862
+    hirid: observation variableid 24000605 (g/L -> /10 g/dL)
+    eicu: Albumin
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+alp:
+  name: Alkaline Phosphatase
+  type: lab
+  unit: U/L
+  value_range: [0, 4000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: ALP
+    mimic_iv: labevents itemid 50863
+    hirid: observation variableid 20002700
+    eicu: ALP
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+alt:
+  name: Alanine Aminotransferase
+  type: lab
+  unit: U/L
+  value_range: [0, 11000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: ALT
+    mimic_iv: labevents itemid 50861
+    hirid: observation variableid 20002600 (U/l)
+    eicu: ALT
+    umm: ALT
+
+anion_gap:
+  name: Anion Gap
+  type: lab
+  unit: mmol/L
+  value_range: [0, 55]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Anion Gap
+    mimic_iv: labevents itemid 50868
+    hirid: null
+    eicu: Anion Gap
+    umm: derived or TBD
+
+ast:
+  name: Aspartate Aminotransferase
+  type: lab
+  unit: U/L
+  value_range: [0, 22000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: AST
+    mimic_iv: labevents itemid 50878
+    hirid: observation variableid 24000330 (U/l)
+    eicu: AST
+    umm: AST
+
+bilirubin_direct:
+  name: Direct (Conjugated) Bilirubin
+  type: lab
+  unit: mg/dL
+  value_range: [0, 66]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Bilirubin (Direct)
+    mimic_iv: labevents itemid 50883
+    hirid: observation variableid 24000560 (umol/L -> mg/dL)
+    eicu: Bilirubin (Direct)
+    umm: l_bilirubin_direct
+  conversion: 'umol/L -> mg/dL: value / 17.1'
+
+bilirubin_indirect:
+  name: Indirect (Unconjugated) Bilirubin
+  type: lab
+  unit: mg/dL
+  value_range: [0, 66]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Bilirubin (Indirect)
+    mimic_iv: labevents itemid 50884
+    hirid: null
+    eicu: null
+    umm: dropped — only 605 enc derivable; l_bilirubin suffices (2026-09-15)
+
+bilirubin_total:
+  name: Total Bilirubin
+  type: lab
+  unit: mg/dL
+  value_range: [0, 66]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Bilirubin (Total)
+    mimic_iv: labevents itemid 50885
+    hirid: observation variableid 20004300 (umol/l -> *0.05848 mg/dl)
+    eicu: Bilirubin (Total)
+    umm: Bilirubin
+  conversion: 'umol/L -> mg/dL: value / 17.1'
+
+blood_culture:
+  name: Blood Culture Order
+  type: microbiology
+  unit: bool
+  value_range: null
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: microbiologyevents.SPEC_TYPE_DESC == BLOOD CULTURE (charttime)
+    mimic_iv: microbiologyevents.spec_type_desc == BLOOD CULTURE (charttime)
+    hirid: null
+    eicu: microLab.culturesite startswith Blood (culturetakenoffset)
+    umm: blood_cultures.order_time
+  note: 'Binary event (value=1.0) at collection hour. Used for Sepsis-3 suspected-infection criterion (antibiotic start + blood culture within ±72h). Not a time-series feature for forecasting; excluded from x_in/x_target.'
+
+bun:
+  name: Blood Urea Nitrogen
+  type: lab
+  unit: mg/dL
+  value_range: [0, 275]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: BUN
+    mimic_iv: labevents itemid 51006
+    hirid: observation variableid 20004100 (Urea mmol/l -> *2.8 mg/dl)
+    eicu: BUN
+    umm: BUN
+
+calcium_free:
+  name: Ionized Calcium
+  type: lab
+  unit: mmol/L
+  value_range: [0, 10]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: Calcium Free
+    mimic_iv: labevents itemid 50808
+    hirid: observation variableid 24000522 (mmol/l ionised)
+    eicu: null
+    umm: l_calcium (ionized Ca, mmol/L)
+
+calcium_total:
+  name: Total Calcium
+  type: lab
+  unit: mg/dL
+  value_range: [0, 40]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Calcium Total
+    mimic_iv: labevents itemid 50893
+    hirid: observation variableid 20005100 (mmol/l)
+    eicu: Calcium
+    umm: l_calcium_total
+
+calcium_corrected:
+  name: Albumin-corrected Total Calcium
+  type: lab
+  unit: mmol/L
+  value_range: [0.5, 5.0]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: null
+    umm: l_calcium_albumin_corrected
+  note: >
+    UMM-specific in 260520 export: ICCA computes Payne-formula corrected total
+    calcium when both total Ca and albumin are available. Other datasets either
+    do not store the correction or have only the raw total/ionised pair.
+
+chloride:
+  name: Serum Chloride
+  type: lab
+  unit: mmol/L
+  value_range: [0, 200]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Chloride
+    mimic_iv: labevents itemid 50902
+    hirid: observation variableids 24000439, 24000521 (mmol/l)
+    eicu: Chloride
+    umm: Cl
+
+creatinine:
+  name: Serum Creatinine
+  type: lab
+  unit: mg/dL
+  value_range: [0, 66]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Creatinine Blood
+    mimic_iv: labevents itemid 50912
+    hirid: observation variableid 20000600 (umol/l -> *0.01131 mg/dl)
+    eicu: Creatinine (Blood)
+    umm: Creatinine
+  conversion: 'umol/L -> mg/dL: value / 88.4'
+
+creatinine_urine:
+  name: Urine Creatinine
+  type: lab
+  unit: mg/dL
+  value_range: [0, 650]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: sparse
+    umm: not_available
+  source_mapping:
+    mimic_iii: Creatinine Urine
+    mimic_iv: labevents itemid 51082
+    hirid: null
+    eicu: Creatinine (Urine)
+    umm: PtLabResult — 4k rows / 1,508 enc (2026-09-15, to extract)
+
+crp:
+  name: C-Reactive Protein
+  type: lab
+  unit: mg/L
+  value_range: [0, 500]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: labevents itemid 50889
+    mimic_iv: labevents itemid 50889
+    hirid: null
+    eicu: null
+    umm: CRP
+
+fibrinogen:
+  name: Fibrinogen
+  type: lab
+  unit: mg/dL
+  value_range: [0, 1500]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: labevents itemid 51214
+    mimic_iv: labevents itemid 51214
+    hirid: observation variableid 24000536
+    eicu: Fibrinogen
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+glucose:
+  name: Blood Glucose
+  type: lab
+  unit: mg/dL
+  value_range: [0, 2200]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Glucose (Blood/Serum/Whole Blood)
+    mimic_iv: labevents itemid 50931 or chartevents 220621
+    hirid: observation variableids 20005110, 24000523, 24000585 (mmol/l -> *18.016 mg/dl)
+    eicu: Glucose / Bedside Glucose
+    umm: Glucose
+  conversion: 'mmol/L -> mg/dL: value * 18.02'
+  note: MIMIC-III has Glucose (Blood), (Serum), (Whole Blood) variants — merge to single glucose if coverages
+    low individually.
+
+inr:
+  name: International Normalized Ratio
+  type: lab
+  unit: '-'
+  value_range: [0, 150]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: INR
+    mimic_iv: labevents itemid 51237
+    hirid: observation variableid 24000567
+    eicu: INR
+    umm: INR
+
+ldh:
+  name: Lactate Dehydrogenase
+  type: lab
+  unit: U/L
+  value_range: [0, 35000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: not_available
+    umm: sparse
+  source_mapping:
+    mimic_iii: LDH
+    mimic_iv: labevents itemid 50954
+    hirid: null
+    eicu: null
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+lipase:
+  name: Serum Lipase
+  type: lab
+  unit: U/L
+  value_range: [0, 20000]
+  tier: dataset_specific
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: labevents itemid 50956
+    mimic_iv: labevents itemid 50956
+    hirid: observation variableid 24000555
+    eicu: null
+    umm: Lipase
+
+magnesium:
+  name: Serum Magnesium
+  type: lab
+  unit: mg/dL
+  value_range: [0, 22]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Magnesium
+    mimic_iv: labevents itemid 50960
+    hirid: observation variableid 24000230 (mmol/l)
+    eicu: Magnesium
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+pct:
+  name: Procalcitonin
+  type: lab
+  unit: ng/mL
+  value_range: [0.01, 500]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: variableid 24000570
+    eicu: null
+    umm: l_pct
+  note: >
+    Procalcitonin is not measured in MIMIC-III/IV (no itemid exists; previously
+    bugged mapping to 50812 = "Intubated" has been removed). eICU has no PCT
+    measurements in lab.csv. HiRID variableid 24000570; UMM as l_pct.
+
+phosphate:
+  name: Serum Phosphate
+  type: lab
+  unit: mg/dL
+  value_range: [0, 22]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Phosphate
+    mimic_iv: labevents itemid 50970
+    hirid: observation variableid 20002500 (mmol/l)
+    eicu: Phosphate
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+potassium:
+  name: Serum Potassium
+  type: lab
+  unit: mmol/L
+  value_range: [0, 15]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Potassium
+    mimic_iv: labevents itemid 50971
+    hirid: observation variableids 20000500, 24000520, 24000833, 24000867 (mmol/l)
+    eicu: Potassium
+    umm: K
+
+protein_total:
+  name: Total Protein
+  type: lab
+  unit: g/dL
+  value_range: [0, 15]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: labevents itemid 50976
+    mimic_iv: labevents itemid 50976
+    hirid: null
+    eicu: Protein (Total)
+    umm: l_protein_total
+
+pt:
+  name: Prothrombin Time
+  type: lab
+  unit: sec
+  value_range: [0, 150]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: PT
+    mimic_iv: labevents itemid 51274
+    hirid: null
+    eicu: PT
+    umm: null
+  note: UMM reports Quick-value (% of normal), not seconds. Either convert or treat as separate feature.
+
+ptt:
+  name: Partial Thromboplastin Time
+  type: lab
+  unit: sec
+  value_range: [0, 150]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: PTT
+    mimic_iv: labevents itemid 51275
+    hirid: observation variableid 20004410 (aPTT seconds)
+    eicu: PTT
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+sodium:
+  name: Serum Sodium
+  type: lab
+  unit: mmol/L
+  value_range: [0, 250]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Sodium
+    mimic_iv: labevents itemid 50983
+    hirid: observation variableids 20000400, 24000519, 24000658, 24000835, 24000866 (mmol/l)
+    eicu: Sodium
+    umm: Na
+
+troponin_i:
+  name: Troponin I
+  type: lab
+  unit: ng/mL
+  value_range: [0, 500]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: labevents itemid 51002
+    mimic_iv: labevents itemids 51002 (empty) + 52642 (670 rows, mostly pre-ICU)
+    hirid: null
+    eicu: lab labname "troponin - I"
+    umm: l_troponin_i
+  note_mimic_iv: >
+    MIMIC-IV TnI mapping points at 52642 (the active v3.1 itemid; 51002 has 0
+    rows). However the 670 measurements are mostly drawn in the emergency
+    department BEFORE ICU admission, so they fall outside the ICU stay window
+    used by the Stage-1 cohort filter — Stage-1 output ends up empty for the
+    qualifying cohort. The cardiac surveillance during ICU is via Troponin T
+    (see troponin_t feature, ~23 % coverage on the same cohort).
+  note: >
+    HiRID measures Troponin T (cardiac), not Troponin I — see troponin_t.
+    The two assays are not interchangeable (different proteins, different
+    reference ranges, different units in some labs).
+
+troponin_t:
+  name: Troponin T (cardiac)
+  type: lab
+  unit: ng/L
+  value_range: [0, 25000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: available
+    hirid: available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: labevents itemid 51003
+    hirid: variableids 24000538 (Troponin T.cardiac) and 24000806 (Troponin T.cardiac high-sensitivity)
+    eicu: null
+    umm: null
+  note: >
+    HiRID-specific. Not interchangeable with troponin_i. Units differ across
+    assays; HiRID reports ng/L. Reference: TnT-cardiac (Roche/Elecsys) is
+    standard in many European hospitals, hsTnT generation in recent years.
+
+
+# ============================================================================
+# VENTILATION
+# ============================================================================
+
+fio2:
+  name: Fraction of Inspired Oxygen
+  type: ventilation
+  unit: fraction
+  value_range: [0.2, 1.0]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: FiO2
+    mimic_iv: chartevents itemid 223835
+    hirid: variableid 2010
+    eicu: FiO2
+    umm: FiO2 / FiO2 setting
+  conversion: 'percent (0-100) -> fraction (0.21-1.0): value / 100 if >1.0'
+
+peep:
+  name: Positive End-Expiratory Pressure
+  type: ventilation
+  unit: cmH2O
+  value_range: [0, 40]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents - PEEP
+    mimic_iv: chartevents itemid 220339
+    hirid: variableid 3845
+    eicu: respiratoryCharting - PEEP
+    umm: PEEP
+
+
+# ============================================================================
+# MEDICATIONS - VASOACTIVE (SOFA-relevant)
+# ============================================================================
+
+dobutamine:
+  name: Dobutamine Rate
+  type: medication
+  unit: ug/kg/min
+  value_range: [0, 40]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Dobutamine
+    mimic_iv: inputevents itemid 221653
+    hirid: pharma variableid 426
+    eicu: Dobutamine ratio (prefer) / Dobutamine dose
+    umm: Dobutamine
+  note: Weight-normalized rate. Any non-zero dobutamine -> SOFA cardio >= 2 per Singer 2016.
+
+dopamine:
+  name: Dopamine Rate
+  type: medication
+  unit: ug/kg/min
+  value_range: [0, 50]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Dopamine
+    mimic_iv: inputevents itemid 221662
+    hirid: null
+    eicu: Dopamine ratio (prefer) / Dopamine dose
+    umm: Dopamine
+  note: Kept as core despite very sparse UMM coverage (<0.1%) — required for SOFA-cardio Singer 2016 thresholds.
+
+epinephrine:
+  name: Epinephrine (Adrenaline) Rate
+  type: medication
+  unit: ug/kg/min
+  value_range: [0, 5]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Epinephrine
+    mimic_iv: inputevents itemid 221289
+    hirid: pharma variableids 71, 1000649, 1000650, 1000655, 1000750
+    eicu: Epinephrine ratio (prefer) / Epinephrine dose
+    umm: Adrenaline
+
+norepinephrine:
+  name: Norepinephrine (Noradrenaline) Rate
+  type: medication
+  unit: ug/kg/min
+  value_range: [0, 5]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Norepinephrine
+    mimic_iv: inputevents itemid 221906
+    hirid: variableid 1321
+    eicu: Norepinephrine ratio (prefer) / Norepinephrine dose
+    umm: Noradrenaline
+  note: First-line vasopressor. eICU has multiple concentration variants (1/2/ratio) — see notebooks/explore_eicu_drugs.ipynb
+    for merge strategy.
+
+vasopressin:
+  name: Vasopressin Rate
+  type: medication
+  unit: IU/min
+  value_range: [0, 0.1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Vasopressin
+    mimic_iv: inputevents itemid 222315
+    hirid: pharma variableids 112 (inj 20 U/ml), 113 (inf 0.4 U/ml)
+    eicu: Vasopressin 1/2/3 (merge by concentration)
+    umm: null
+  note: UMM coverage to be confirmed — not in the 50-var clin list but may exist elsewhere.
+
+
+# ============================================================================
+# MEDICATIONS - OTHER
+# ============================================================================
+
+amiodarone:
+  name: Amiodarone
+  type: medication
+  unit: mg/h
+  value_range: [0, 2000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Amiodarone
+    mimic_iv: inputevents itemids 221347, 228339, 229654, 230034
+    hirid: null
+    eicu: infusionDrug 'Amiodarone (mg/min)' ×60 → mg/h (32% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+fentanyl:
+  name: Fentanyl Infusion
+  type: medication
+  unit: ug/h
+  value_range: [0, 500]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Fentanyl
+    mimic_iv: inputevents itemid 221744
+    hirid: variableid 1000251, 1000692, 1000741
+    eicu: infusionDrug 'Fentanyl (mcg/hr)' direct (45% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+furosemide:
+  name: Furosemide
+  type: medication
+  unit: mg/h
+  value_range: [0, 250]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Furosemide
+    mimic_iv: inputevents itemid 221794
+    hirid: null
+    eicu: infusionDrug 'Furosemide (mg/hr)' direct (45% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+  note: 'HiRID not_available: only 5 stays have furosemide (too few for a forecast target) — excluded at extraction.'
+
+heparin:
+  name: Heparin Infusion
+  type: medication
+  unit: IU/h
+  value_range: [0, 25300]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Heparin
+    mimic_iv: inputevents itemid 225152
+    hirid: null
+    eicu: infusionDrug 'Heparin (units/hr)' direct (41% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+  note: 'HiRID not_available: only 2 stays have heparin — near-zero coverage gave a degenerate mean=0/std=1 normalisation (value 6000 → z=6000) that blew up MSE. Excluded at extraction.'
+
+insulin:
+  name: Insulin (any formulation)
+  type: medication
+  unit: IU/h
+  value_range: [0, 50]   # was [0,1500]: clinically absurd cap admitted impossible eICU outliers (z up to 198) → insulin per-var MSE 16.88 flipped eICU below LOCF (§12.8)
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Insulin Humalog/NPH/Regular/Glargine (separate variants)
+    mimic_iv: inputevents itemids 223257, 223258
+    hirid: variableid 15, 1000724
+    eicu: infusionDrug 'Insulin (units/hr)' direct (64% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+  note: MIMIC-III has separate formulations; keep them separate if each >=3% coverage, else only include
+    formulations above threshold.
+
+midazolam:
+  name: Midazolam Infusion
+  type: medication
+  unit: mg/h
+  value_range: [0, 500]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Midazolam
+    mimic_iv: inputevents itemid 221668
+    hirid: variableid 251, 252, 1000700, 1001051, 1001054
+    eicu: infusionDrug 'Midazolam (mg/hr)' direct (52% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+dexmedetomidine:
+  name: Dexmedetomidine (Precedex)
+  type: medication
+  unit: ug/kg/h
+  value_range: [0, 1.5]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: inputevents_mv itemid 225150
+    mimic_iv: inputevents itemids 225150, 229420; rateuom=mcg/kg/hour → direct (no conversion)
+    hirid: null
+    eicu: infusionDrug 'Dexmedetomidine (mcg/kg/hr)' direct (34% of records; ml/hr not mergeable)
+    umm: m_dexmedetomidine
+
+milrinone:
+  name: Milrinone
+  type: medication
+  unit: ug/kg/min
+  value_range: [0, 50]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Milrinone
+    mimic_iv: inputevents itemid 221986
+    hirid: null
+    eicu: infusionDrug 'Milrinone (mcg/kg/min)' direct (23% of records; ml/hr not mergeable)
+    umm: not viable — 4 encounters total (2026-09-15)
+
+morphine:
+  name: Morphine
+  type: medication
+  unit: mg/h
+  value_range: [0, 4000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: Morphine Sulfate
+    mimic_iv: inputevents itemid 225154
+    hirid: pharma variableids 1000444,1000659,1000862,1000932,1000684,1000716
+    eicu: null
+    umm: m_morphine
+
+pantoprazole:
+  name: Pantoprazole
+  type: medication
+  unit: mg/h
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: inputevents itemid 225910
+    hirid: null
+    eicu: Pantoprazole
+    umm: present (7,801 enc) but EXCLUDED — near-universal and UMM-only (2026-09-15)
+
+piperacillin:
+  name: Piperacillin (+/-Tazobactam)
+  type: medication
+  unit: mg/h
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Piperacillin
+    mimic_iv: inputevents itemid TBD
+    hirid: null
+    eicu: null
+    umm: exported as abx_pip_tazo
+  note: Representative broad-spectrum antibiotic. Consider expanding to antibiotic class aggregates later.
+
+propofol:
+  name: Propofol Infusion
+  type: medication
+  unit: mg/kg/h
+  value_range: [0, 12000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: sparse
+  source_mapping:
+    mimic_iii: Propofol
+    mimic_iv: inputevents itemid 222168
+    hirid: variableid 208, 1000491, 1001050, 1001051, 1001052, 1001053, 1000691, 1000699
+    eicu: infusionDrug 'Propofol (mcg/kg/min)' ×0.06 → mg/kg/h (39% of records; ml/hr not mergeable)
+    umm: mapped in harmonize/umm.py (annotation was stale)
+
+vancomycin:
+  name: Vancomycin
+  type: medication
+  unit: mg/h
+  value_range: [0, 8]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: Vancomycin
+    mimic_iv: inputevents itemid TBD
+    hirid: null
+    eicu: null
+    umm: exported as abx_vancomycin
+
+
+# ============================================================================
+# FLUID BALANCE
+# ============================================================================
+
+fluid_balance:
+  name: Net Fluid Balance (cumulative)
+  type: fluid
+  unit: mL
+  value_range: [-20000, 20000]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: not_available
+    eicu: not_available
+    umm: not_available
+  source_mapping:
+    mimic_iii: derived from input/output events
+    mimic_iv: derived
+    hirid: derived from pharma infusion totals minus urine_output (variableid 10020000); no direct balance variable
+    eicu: derived
+    umm: Net balance
+
+urine_output:
+  name: Hourly Urine Output
+  type: fluid
+  unit: mL/h
+  value_range: [0, 2500]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: Urine
+    mimic_iv: outputevents itemid 226559 and others
+    hirid: observation variableid 10020000 (ml/h)
+    eicu: Urine
+    umm: Urine output
+  note: Hourly rate in data. Aggregated to 24h for SOFA-renal component.
+
+
+# ============================================================================
+# DEMOGRAPHICS (static per stay)
+# ============================================================================
+
+apache_iv_score:
+  name: APACHE-IVa Score
+  type: demographic
+  unit: score
+  value_range: [0, 286]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: apachePatientResult.apachescore (apacheversion==IVa)
+    umm: null
+  note: 'Pre-computed APACHE-IVa severity score (eICU only). Second severity anchor alongside the SAPS-II we compute. MIMIC/HiRID/UMM have no pre-computed APACHE.'
+
+apache_iv_pred_mortality:
+  name: APACHE-IVa Predicted ICU Mortality
+  type: demographic
+  unit: prob
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: available
+    umm: not_available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: apachePatientResult.predictedicumortality (apacheversion==IVa)
+    umm: null
+  note: 'APACHE-IVa model-predicted ICU mortality probability (eICU only). Benchmark for mortality-prediction comparison.'
+
+charlson_comorbidity_index:
+  name: Charlson Comorbidity Index
+  type: demographic
+  unit: score
+  value_range: [0, 37]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: DIAGNOSES_ICD.ICD9_CODE → Quan 2005 ICD-9 mapping
+    mimic_iv: diagnoses_icd.icd_code + icd_version → Quan 2005 ICD-9/10 mapping
+    hirid: null
+    eicu: diagnosis.icd9code → Quan 2005 ICD-9 mapping
+    umm: diagnoses.icd10_code (Quan 2005 ICD-10)
+  note: 'Integer 0–37. Computed via harmonize/diagnoses.py using Quan 2005 algorithm. UMM diagnoses table available (ICD-10) but Charlson not yet implemented.'
+
+chronic_disease_sapsii:
+  name: SAPS-II Chronic Disease Points
+  type: demographic
+  unit: saps2_pts
+  value_range: [0, 17]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: derived from charlson_comorbidity_index (metastatic/malignancy/AIDS flags)
+    mimic_iv: derived from charlson_comorbidity_index
+    hirid: null
+    eicu: derived from charlson_comorbidity_index
+    umm: diagnoses.icd10_code (Quan 2005 ICD-10)
+  note: 'SAPS-II chronic disease component: 0=none, 9=metastatic/malignancy, 17=AIDS. Le Gall 1993.'
+
+admission_type:
+  name: Admission Type
+  type: demographic
+  unit: categorical
+  value_range: null
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: admissions.admission_type + icustays.first_careunit
+    mimic_iv: admissions.admission_type + icustays.first_careunit
+    hirid: null
+    eicu: patient.unitadmitsource + patient.hospitaladmitsource
+    umm: demographics.admission_type_saps
+  note: 'Stored as SAPS-II admission-type points (0=scheduled surgical, 6=medical, 8=unscheduled surgical). MIMIC-III/IV: via (admission_type string, first_careunit). eICU: OR/Recovery Room/PACU → surgical; ED hospitaladmitsource → unscheduled (8), else scheduled (0); other → medical (6). UMM: from ICCA SAPS code. HiRID: absent (general_table has only age/sex/discharge_status).'
+
+age:
+  name: Age at ICU Admission
+  type: demographic
+  unit: years
+  value_range: [0, 120]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: patients.dob + admissions.admittime
+    mimic_iv: patients.anchor_age (capped at 91 if >89)
+    hirid: general_table.age
+    eicu: patient.age
+    umm: patient master table
+  note: MIMIC-IV caps ages >89 at 91. Consider same cap across datasets for consistency.
+
+bmi:
+  name: Body Mass Index
+  type: demographic
+  unit: kg/m2
+  value_range: [5, 120]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping:
+    mimic_iii: derived from weight and height
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+
+height:
+  name: Body Height at Admission
+  type: demographic
+  unit: cm
+  value_range: [30, 250]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: chartevents - Height
+    mimic_iv: chartevents itemid 226730
+    hirid: observation variableid 10000450 (cm)
+    eicu: patient.admissionheight
+    umm: patient master or admission record
+  conversion: 'inches -> cm: value * 2.54'
+
+icu_type:
+  name: ICU Type
+  type: demographic
+  unit: categorical
+  value_range: null
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: patient.unittype
+    umm: demographics.icu_unit_first
+  note: 'Categorical: MICU / SICU / CCU / CSRU / TSICU / NICU / Mixed.'
+
+los_hours:
+  name: ICU Length of Stay
+  type: demographic
+  unit: h
+  value_range: [0, 720]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: icustays.los (days * 24)
+    mimic_iv: icustays.los (days * 24)
+    hirid: derived from last observation hour
+    eicu: patient.unitdischargeoffset / 60
+    umm: derived from icu_start / icu_end
+  note: Length of ICU stay in hours, stored as static feature at hour=0.
+
+sex:
+  name: Biological Sex
+  type: demographic
+  unit: M/F
+  value_range: null
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: patients.gender
+    mimic_iv: patients.gender
+    hirid: general_table.sex
+    eicu: patient.gender
+    umm: patient master table
+
+weight_admission:
+  name: Body Weight at Admission
+  type: demographic
+  unit: kg
+  value_range: [0, 300]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: earliest weight chartevents (itemids 762, 763, 3580, 224639, 226512)
+    mimic_iv: earliest weight chartevents (itemids 224639, 226512, 226531)
+    hirid: variableid 10000400, earliest observation
+    eicu: patient.admissionweight
+    umm: admission record
+  note: Static admission weight, distinct from time-varying 'weight' vital.
+
+# --- Antibiotic exposure flags (stay-level boolean) -------------------------
+# These are NOT the same as the time-varying medication infusion features
+# (vancomycin / piperacillin) — they record "did the patient receive this
+# antibiotic at any point during the ICU stay". Currently only UMM provides
+# them as pre-computed flags; for the other datasets the same signal would
+# need to be derived in Stage 2 from the medication tables.
+
+had_pip_tazo:
+  name: Antibiotic exposure — Piperacillin/Tazobactam (any time during stay)
+  type: demographic
+  unit: bool
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: null
+    umm: demographics.had_pip_tazo
+  note: Stay-level binary flag. Could be derived for other datasets in Stage 2.
+
+had_meropenem:
+  name: Antibiotic exposure — Meropenem (any time during stay)
+  type: demographic
+  unit: bool
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: null
+    umm: demographics.had_meropenem
+
+had_vancomycin:
+  name: Antibiotic exposure — Vancomycin (any time during stay)
+  type: demographic
+  unit: bool
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: null
+    umm: demographics.had_vancomycin
+  note: Distinct from the time-varying `vancomycin` infusion-rate feature.
+
+had_linezolid:
+  name: Antibiotic exposure — Linezolid (any time during stay)
+  type: demographic
+  unit: bool
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: not_available
+    mimic_iv: not_available
+    hirid: not_available
+    eicu: not_available
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: null
+    umm: demographics.had_linezolid
+
+
+# ============================================================================
+# DERIVED - SOFA COMPONENTS AND TOTAL
+# ============================================================================
+# Computed per hour using worst-of-last-24h per component (Singer 2016
+# operationalization). Early-stay hours (t < 24) reflect partial windows.
+
+sofa_cardiovascular:
+  name: SOFA - Cardiovascular Component
+  type: derived
+  unit: points
+  value_range: [0, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: "Computation per Singer 2016:\n  0: MAP >= 70 mmHg, no vasopressors\n  1: MAP < 70 mmHg, no vasopressors\n\
+    \  2: Dopamine <=5 OR Dobutamine (any)\n  3: Dopamine >5 OR Epinephrine <=0.1 OR Norepinephrine <=0.1\n\
+    \  4: Dopamine >15 OR Epinephrine >0.1 OR Norepinephrine >0.1\nDoses in ug/kg/min. Highest applicable\
+    \ score among active agents.\n"
+
+sofa_cns:
+  name: SOFA - Central Nervous System Component
+  type: derived
+  unit: points
+  value_range: [0, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: "Computation based on GCS total (sum of eye + motor + verbal):\n  0: GCS 15\n  1: GCS 13-14\n\
+    \  2: GCS 10-12\n  3: GCS 6-9\n  4: GCS <6\nNo sedation adjustment (documented simplification). Values\
+    \ as recorded.\n"
+
+sofa_coagulation:
+  name: SOFA - Coagulation Component
+  type: derived
+  unit: points
+  value_range: [0, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: "Computation based on platelets (10^9/L):\n  0: >=150\n  1: <150\n  2: <100\n  3: <50\n  4: <20\n"
+
+sofa_liver:
+  name: SOFA - Liver Component
+  type: derived
+  unit: points
+  value_range: [0, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: "Computation based on total bilirubin (mg/dL):\n  0: <1.2\n  1: 1.2-1.9\n  2: 2.0-5.9\n  3: 6.0-11.9\n\
+    \  4: >=12.0\n"
+
+sofa_renal:
+  name: SOFA - Renal Component
+  type: derived
+  unit: points
+  value_range: [0, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: "Computation based on creatinine (mg/dL) OR 24h urine output (mL), max score:\n  Creatinine: 0:<1.2,\
+    \ 1:1.2-1.9, 2:2.0-3.4, 3:3.5-4.9, 4:>=5.0\n  Urine/24h:  3: <500 mL, 4: <200 mL\nDialysis override\
+    \ (if active RRT): automatic 4.\nUrine aggregated over trailing 24h; data stores hourly urine separately.\n"
+
+sofa_respiratory:
+  name: SOFA - Respiratory Component
+  type: derived
+  unit: points
+  value_range: [0, 4]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: "Computation based on P/F ratio (PaO2/FiO2):\n  0: >=400\n  1: <400\n  2: <300\n  3: <200 AND\
+    \ mechanically ventilated\n  4: <100 AND mechanically ventilated\nIf not mechanically ventilated,\
+    \ max score is 2 regardless of P/F.\n"
+
+sofa_total:
+  name: SOFA Total Score
+  type: derived
+  unit: points
+  value_range: [0, 24]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: Sum of 6 components. Range 0-24.
+
+
+# ============================================================================
+# DERIVED - OTHER HELPERS
+# ============================================================================
+
+gcs_total:
+  name: Glasgow Coma Scale - Total
+  type: derived
+  unit: points
+  value_range: [3, 15]
+  tier: core
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: available
+  source_mapping:
+    mimic_iii: null
+    mimic_iv: null
+    hirid: null
+    eicu: null
+    umm: v_gcs_total
+  note: >
+    Sum of gcs_eye + gcs_motor + gcs_verbal. Range 3-15. For MIMIC/HiRID/eICU,
+    computed in Step 2 from components when all three are available in the
+    same hour. UMM charts gcs_total directly (nurse-entered composite).
+
+mortality_icu:
+  name: ICU Mortality
+  type: outcome
+  unit: bool
+  value_range: [0, 1]
+  tier: core
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: DEATHTIME within [intime, outtime+1h]
+    mimic_iv: deathtime within [intime, outtime+1h]
+    hirid: general_table.discharge_status == "dead"
+    eicu: patient.unitdischargestatus == "Expired"
+    umm: death_time within [icu_start, icu_end+1h]
+  note: 'TRUE ICU mortality (death during the ICU stay), consistent across all 5 datasets. Approx rates: MIMIC-III 7.4%, MIMIC-IV 7.5%, eICU 5.2%, HiRID 6.1%, UMM 19.4%. NOTE: MIMIC-III/IV and UMM previously used hospital/all-cause flags (mislabelled); corrected 2026-05-31. Binary, stored at hour=0.'
+
+mortality_hospital:
+  name: Hospital Mortality
+  type: outcome
+  unit: bool
+  value_range: [0, 1]
+  tier: extended
+  sofa_relevant: false
+  availability:
+    mimic_iii: available
+    mimic_iv: available
+    hirid: not_available
+    eicu: available
+    umm: available
+  source_mapping:
+    mimic_iii: admissions.HOSPITAL_EXPIRE_FLAG
+    mimic_iv: admissions.hospital_expire_flag
+    hirid: null
+    eicu: patient.hospitaldischargestatus == "Expired"
+    umm: deceased flag (all-cause; death_time may be weeks post-ICU-discharge)
+  note: 'In-hospital / all-cause death. Approx rates: MIMIC-III 11.0%, MIMIC-IV 11.9%, eICU 9.0%, UMM 27.2% (all-cause, incl. deaths up to ~56d post-ICU). HiRID is ICU-only (no hospital outcome). Additional flag alongside mortality_icu for severity benchmarking.'
+
+pf_ratio:
+  name: PaO2/FiO2 Ratio (Horowitz index)
+  type: derived
+  unit: mmHg
+  value_range: [0, 800]
+  tier: extended
+  sofa_relevant: true
+  availability:
+    mimic_iii: derived
+    mimic_iv: derived
+    hirid: derived
+    eicu: derived
+    umm: derived
+  source_mapping: null
+  note: PaO2 (mmHg) / FiO2 (fraction). Used in SOFA-respiratory. Computed only when both inputs are within
+    same aggregation bin.
+
+
+# ============================================================================
+# INDEX - alphabetical list of all 120 feature names in this catalog
+# ============================================================================
+# admission_type, age, albumin, alp, alt, amiodarone, amv, anion_gap,
+# ast, base_excess, basophils_pct, bilirubin_direct, bilirubin_indirect,
+# bilirubin_total, bmi, bun, calcium_free, calcium_total,
+# cardiac_output, chloride, creatinine, creatinine_urine, crp, crr, dbp,
+# dbp_invasive, dbp_noninvasive, dexmedetomidine, dobutamine, dopamine,
+# eosinophils_pct, epinephrine, etco2, fentanyl, fibrinogen, fio2,
+# fluid_balance, furosemide, gcs_eye, gcs_motor, gcs_total, gcs_verbal,
+# glucose, hco3, height, hematocrit, hemoglobin, heparin, hr, icu_type,
+# inr, insulin, intubated, lactate, ldh, lipase, los_hours,
+# lymphocytes_abs, lymphocytes_pct, magnesium, mbp, mbp_invasive,
+# mbp_noninvasive, mch, mchc, mcv, mechanical_ventilation, midazolam,
+# milrinone, monocytes_pct, morphine, mortality_icu, mpv,
+# neutrophils_pct, norepinephrine, paco2, pantoprazole, pao2, pct, peep,
+# pf_ratio, ph_arterial, phosphate, piperacillin, platelets, potassium,
+# propofol, protein_total, pt, ptt, rbc, rdw, rr, sao2, sbp,
+# sbp_invasive, sbp_noninvasive, sex, sodium, sofa_cardiovascular,
+# sofa_cns, sofa_coagulation, sofa_liver, sofa_renal, sofa_respiratory,
+# sofa_total, spo2, stroke_volume, svo2, svri, temp_core, tidal_volume,
+# troponin_i, troponin_t, urine_output, vancomycin, vasopressin, wbc,
+# weight, weight_admission
+# ============================================================================

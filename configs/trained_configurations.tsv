@@ -1,0 +1,13 @@
+# trained runs per family and database (all configurations, seeds and development
+# runs with a completed final_metrics.json; not only the hyperparameter grid)
+family	umm	hirid	mimic_iii	mimic_iv	eicu
+Autoformer	17	17	17	17	17
+DLinear	16	16	16	16	17
+Dense DMS	17	17	17	17	17
+DenseAR	289	279	272	268	248
+GRU	45	45	45	46	45
+Informer	58	58	58	58	58
+LSTM	45	45	45	45	45
+Mamba	44	44	44	41	31
+PatchTST	100	100	95	68	55
+STraTS	124	125	122	114	101

@@ -1,0 +1,1 @@
+dataset	member	run_name	seed	d_model	d_ff	n_heads	n_layers	dropout	lr	weight_decay	batch_size	epochs	loss	schedule	val_metric
