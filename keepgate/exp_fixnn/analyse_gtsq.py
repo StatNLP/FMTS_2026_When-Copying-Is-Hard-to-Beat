@@ -12,6 +12,7 @@ Subcommands
   sirs        do the working-diagnosis rungs agree with MEASURED SIRS criteria? (Sec. 4)
   prognosis   can the physician forecast tomorrow? v1-only prospective item (Sec. 4)
   ward        the severity ranking is a capacity-constrained ward assignment (App. G)
+  peritem     per-item breakdown of the FMTS main table, all 45 items (camera-ready appendix)
   all         run everything
 
 Conventions: target-observed masking unless stated; corrected (fix_new_new) splits; the twin/pooling
@@ -20,7 +21,7 @@ statistics live in bayes_floor.py and deliberately pool train+test there -- do n
 Usage:  python exp_fixnn/analyse_gtsq.py [subcommand]
 """
 import os
-import argparse, collections, os, sys
+import argparse, collections, os, re, sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__)); KEEP = os.path.dirname(HERE)
@@ -669,9 +670,130 @@ def cmd_chronic():
                   f"   -> suspected on day D+1 {after/opp*100:5.1f}%")
 
 
+
+# --------------------------------------------------------------------------------------------
+# Per-item breakdown of the FMTS main table. Reviewer 1q3E asked for the 45 items individually
+# ("which clinical parameters are easier or harder to forecast could itself be one of the main
+# contributions"), and the decision letter lists their absence as a noted weakness.
+#
+# Nothing is recomputed from a model here, so this is a decomposition of the test evaluation that
+# was already read, not a second read-off. The three deterministic rows come from the stored
+# per-cell predictions; the learned rows are the mean over their five seeds of each seed's
+# per-item metrics, which is the same `report_object=seedmean` the table uses. The self-check at
+# the end is exact: the mean over items of each column must equal that row's published macro-F1.
+FMTS_ROWS = os.path.join(HERE, "fmts_eval_rows")
+PERITEM_COLS = ["Persistence", "Persistence + rule", "Gate over rule, macro-F1 selected"]
+
+
+# English item labels as published with the instrument (Lindner et al. 2022, Tables 1 and 3), so
+# the appendix uses the names a reader can look up; the recorded identifiers are German.
+_EN_ITEM = {"i01000_Gruppe_(0|1|2)": "Daily rating of illness severity",
+            "i02000_Klinisches_Gesamtbild": "Patient's development in last 24\\,h",
+            "i03000_Arbeitsdiagnose": "Working diagnosis",
+            "i04000_Infektionsverdacht": "Suspicion of infection",
+            "i09_Capillary_Leak": "Capillary leak"}
+_EN_FOCUS = {"abdominell": "abdominal", "Endokarditis": "endocarditis",
+             "Blood-stream-infection": "blood stream", "Haut": "skin",
+             "intrakraniell / meningeal": "intracranial/meningeal", "katheterassoziiert": "catheter",
+             "thorakal": "thoracic", "urogenital": "urogenital", "Gelenke / Knochen": "bone/joint"}
+_EN_ORGAN = {"Lunge": "Lung", "Niere": "Kidney", "Gehirn": "Brain", "Herz": "Heart",
+             "Leber": "Liver", "Gastrointestinal": "Gastrointestinal",
+             "Gerinnungssystem": "Coagulation system", "Knochenmark": "Bone marrow"}
+_EN_FIELD = {"present": "present", 'akut oder "neu"': "acute or new",
+             "Ursache für Dysfunktion": "cause", "chronisch": "chronic"}
+
+
+def _tex(s):
+    """Recorded item identifier -> its published English label, LaTeX-safe."""
+    if s in _EN_ITEM:
+        return _EN_ITEM[s]
+    if s.startswith("i05100_Lokalisation__"):
+        return "Focus of infection: " + _EN_FOCUS[s[len("i05100_Lokalisation__"):]]
+    if s.startswith("i11100_"):
+        organ, field = s[len("i11100_"):].split("_", 1)
+        return f"{_EN_ORGAN[organ]}: {_EN_FIELD[field]}"
+    raise KeyError(f"no English label for item {s!r}")
+
+
+def cmd_peritem():
+    import json
+    man = json.load(open(os.path.join(FMTS_ROWS, "fmts_manifest.json")))
+    z = np.load(os.path.join(FMTS_ROWS, "fmts_predictions.npz"), allow_pickle=True)
+    items, nc, ft = list(man["items"]), man["nclasses"], man["ftypes"]
+    T, I, M = z["target"], z["day_d"], z["mask"]
+
+    # per-item f1 / acc_change, one dict per reported row
+    per = {}
+    for row in PERITEM_COLS:
+        runs = man["rows"][row]["runs"]
+        if not runs:
+            rep = ge.per_feature_report(z["pred::" + row], I, T, M, ft, nc)["per_feat"]
+            per[row] = {items[g]: (rep[g]["f1"], rep[g]["acc_change"]) for g in rep}
+        else:
+            acc = collections.defaultdict(lambda: [0.0, 0.0])
+            for r in runs:
+                d = json.load(open(os.path.join(KEEP, r, "gtsq_metrics_test.json")))
+                for it in items:
+                    acc[it][0] += d[it]["f1_macro"] / len(runs)
+                    acc[it][1] += (d[it]["acc_change"] or 0.0) / len(runs)
+            per[row] = {it: tuple(v) for it, v in acc.items()}
+
+    # support and change rate are properties of the data, read once
+    dom = json.load(open(os.path.join(KEEP, man["rows"][PERITEM_COLS[-1]]["runs"][0],
+                                      "gtsq_metrics_test.json")))
+    n_tot = {it: int(M[:, g].sum()) for g, it in enumerate(items)}
+    n_chg = {it: int((I[M[:, g], g] != T[M[:, g], g]).sum()) for g, it in enumerate(items)}
+
+    print(f"  {'item':44s}{'n':>7}{'chg%':>7}" + "".join(f"{c[:11]:>12}" for c in PERITEM_COLS)
+          + f"{'dF1':>8}{'Accc':>7}")
+    lines = []
+    for it in items:
+        f1p, f1r, f1g = (per[c][it][0] for c in PERITEM_COLS)
+        accc = per[PERITEM_COLS[-1]][it][1]
+        pct = 100.0 * n_chg[it] / n_tot[it] if n_tot[it] else float("nan")
+        print(f"  {it[:44]:44s}{n_tot[it]:7d}{pct:7.2f}{f1p:12.4f}{f1r:12.4f}{f1g:12.4f}"
+              f"{f1g - f1r:+8.4f}{accc:7.3f}")
+        dlt = f1g - f1r
+        dlt_s = "0.0000" if abs(dlt) < 5e-5 else f"{dlt:+.4f}"   # no signed zeros from rounding
+        lines.append(f"{_tex(it)} & {n_tot[it]:,} & {pct:.2f} & "
+                     f"{f1p:.4f} & {f1r:.4f} & {f1g:.4f} & {dlt_s} & "
+                     + (f"{accc:.3f}" if n_chg[it] else "--") + r" \\")
+
+    print()
+    for c in PERITEM_COLS:                      # the self-check: column mean == Table 1
+        m = float(np.mean([per[c][it][0] for it in items]))
+        print(f"  mean over items, {c:34s} macro-F1 = {m:.4f}")
+
+    out = os.path.join(FMTS_ROWS, "fmts_peritem.tex")
+    with open(out, "w") as f:
+        f.write("% generated by `python exp_fixnn/analyse_gtsq.py peritem` -- do not hand-edit\n")
+        f.write(r"""% needs \usepackage{longtable} in the preamble
+\begingroup\footnotesize
+\begin{longtable}{@{}lrrrrrrr@{}}
+\caption{Per-item test results, all 45 items. $n$ is the item's scored cells (observed on both days)
+and chg\% the share of them that change; macro-F1 is the per-item class-macro F1 whose mean over
+items is the aggregate in Table~\ref{tab:main}, so each F1 column averages to that row's published
+value. $\Delta$ is gate $-$ rule. $\Accc$ is the gate's destination accuracy on that item's changed
+cells. The gate columns are the mean over five seeds.}
+\label{tab:peritem}\\
+\toprule
+Item & $n$ & chg\% & Persist. & Rule & Gate & $\Delta$ & $\Accc$ \\
+\midrule
+\endfirsthead
+\toprule
+Item & $n$ & chg\% & Persist. & Rule & Gate & $\Delta$ & $\Accc$ \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+""")
+        f.write("\n".join(lines) + "\n\\end{longtable}\n\\endgroup\n")
+    print(f"\n  wrote {out}")
+
 CMDS = {"cohort": cmd_cohort, "duplicates": cmd_duplicates, "focus": cmd_focus, "volatility": cmd_volatility, "describe": cmd_describe, "purity": cmd_purity, "chronic": cmd_chronic,
         "residual": cmd_residual, "direction": cmd_direction,
-        "sirs": cmd_sirs, "prognosis": cmd_prognosis, "ward": cmd_ward}
+        "sirs": cmd_sirs, "prognosis": cmd_prognosis, "ward": cmd_ward,
+        "peritem": cmd_peritem}
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])

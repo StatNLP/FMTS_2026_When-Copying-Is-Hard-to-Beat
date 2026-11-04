@@ -29,7 +29,7 @@ Nothing in this repository will run end-to-end without them, and no checkpoint, 
 prediction or per-cell prediction is included — the persistence row is by construction
 identical to the previous day's record, so releasing predictions would release the data.
 
-The **aggregate evaluation artefacts** that back Table 1 and Figure 2 — metrics,
+The **aggregate evaluation artefacts** that back Table 1 and Figure 3 — metrics,
 patient-clustered intervals, departure counts and the run manifest recording the input
 cutoff, label version, mask, reporting object and seeds of every row — ship with the paper
 as supplementary material. They are what lets you check a reported figure against its
@@ -73,7 +73,8 @@ splits). `02_preprocess.py` writes the overlap check it performed.
 | part of the paper | command |
 |---|---|
 | Table 1, and every number in Sections 3–4 | `exp_fixnn/eval_deploy.py fmts` |
-| Figure 2 (departures from persistence) | `make_figure.py` in the supplement, from `fmts_departures.csv` |
+| Figure 1 (carry-forward schematic) and Figure 3 (departures from persistence) | `exp_fixnn/make_figure.py`; Figure 3 from `fmts_departures.csv` |
+| Appendix A.8 (per-item results, 45 items) | `exp_fixnn/analyse_gtsq.py peritem`, from the per-cell test predictions and the per-seed metrics of the evaluation pass |
 | Appendix B (pretrained forecasters) | `keepgate/fm_baseline.py`, scored by the pass above |
 | Appendix C (change score, temporal holdout) | `exp_fixnn/report.py readout`, `exp_fixnn/report.py drift` |
 | cohort flow, patient linkage, split disjointness | `exp_fixnn/report.py cohort` |
